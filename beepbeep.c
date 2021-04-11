@@ -27,7 +27,7 @@
 #include <pulse/error.h>
 #include <pulse/gccmacro.h>
 
-#define SAMPLE_RATE	8000
+#define SAMPLE_RATE	44100
 #define PI		3.14159265
 
 struct ccitt5 {
