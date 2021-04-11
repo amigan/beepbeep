@@ -175,7 +175,7 @@ int main(int argc, char *argv[])
 	printf("f = forward transfer\n");
 	if (dial[0])
 		printf(". = dial %s\n", dial);
-	printf("Escape to exit.\n");
+	printf("Escape or q to exit.\n");
 
 	tcgetattr(0, &orig);
      	now = orig;
@@ -206,7 +206,7 @@ int main(int argc, char *argv[])
 				dial_pa(s, dial);
 			break;
 		}
-		if (ch == 3)
+		if (ch == 3 || ch == 'q')
 			break;
 	}
 	tcsetattr(0, TCSANOW, &orig);
