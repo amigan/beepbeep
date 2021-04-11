@@ -1,0 +1,11 @@
+The use of this software on telephone lines without the permission of the
+owners of these lines is illegal.
+
+The purpose of this software is to test CCITT #5 implementations and to learn
+about the history of blueboxing. 
+
+Run it as follows:
+
+# beepbeep --help
+
+
