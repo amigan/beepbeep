@@ -4,6 +4,7 @@
 **                                                                           **
 **---------------------------------------------------------------------------**
 ** Copyright: Andreas Eversberg                                              **
+** Converted to use PulseAudio by Daniel Ponte				     **
 **                                                                           **
 ** minimal blueboxing software                                               **
 **                                                                           **
@@ -20,10 +21,13 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <errno.h>
-#include <linux/soundcard.h>
+#include <stdlib.h>
+
+#include <pulse/simple.h>
+#include <pulse/error.h>
+#include <pulse/gccmacro.h>
 
 #define SAMPLE_RATE	8000
-#define DSP_DEVICE	"/dev/dsp"
 #define PI		3.14159265
 
 struct ccitt5 {
@@ -52,16 +56,24 @@ struct ccitt5 {
 	{0, 0, 0, 0, 0}
 };
 
+void close_pa(pa_simple *s)
+{
+	if (s)
+		pa_simple_free(s);
+}
+
+
 /*
  * stream bell sound
  */
-void dial_dsp(int dsp, char *dial)
+void dial_pa(pa_simple *s, char *dial)
 {
 	int i, j, len;
+	int error;
 	double k1, k2;
 	unsigned char buffer[SAMPLE_RATE]; /* one second */
 
-	if (dsp < 0)
+	if(!s)
 		return;
 
 	while(*dial) {
@@ -78,92 +90,57 @@ void dial_dsp(int dsp, char *dial)
 			k2 = 2.0 * PI * ccitt5[i].f2 / SAMPLE_RATE;
 			for (j = 0; j < len; j++)
 				buffer[j] = 64.0 * (2.0 + sin(k1 * j) + sin(k2 * j));
-			write(dsp, buffer, len);
+			if (pa_simple_write(s, buffer, (size_t) len, &error) < 0) {
+				fprintf(stderr, __FILE__": pa_simple_write() failed: %s\n", pa_strerror(error));
+				close_pa(s);
+				exit(-1);
+			}
 			/* send pause */
 			len = ccitt5[i].delay * SAMPLE_RATE / 1000;
 			memset(buffer, 128, len);
-			write(dsp, buffer, len);
+			if (pa_simple_write(s, buffer, (size_t) len, &error) < 0) {
+				fprintf(stderr, __FILE__": pa_simple_write() failed: %s\n", pa_strerror(error));
+				close_pa(s);
+				exit(-1);
+			}
+
 		}
 		dial++;
 	}
 
-	ioctl(dsp, SOUND_PCM_SYNC, 0);
+	if (pa_simple_drain(s, &error) < 0) {
+		fprintf(stderr, __FILE__": pa_simple_drain() failed: %s\n", pa_strerror(error));
+		close_pa(s);
+		exit(-1);
+	}
 }
 
 
 /*
- * open dsp
+ * open pulse
  */
-int open_dsp(char *device, int rate)
+pa_simple* open_pa(char *pname)
 {
-	int dsp;
-	unsigned long arg;
-//	audio_buf_info info;
+	int error;
 
-	if ((dsp=open(device, O_WRONLY)) < 0) {
-		fprintf(stderr, "cannot open '%s'\n", device);
-		return -errno;
-	}
-#if 0
-	if (ioctl(dsp, SNDCTL_DSP_RESET, NULL) < 0) {
-		fprintf(stderr, "ioctl failed with SOUND_DSP_RESET\n");
-		close(dsp);
-		return -errno;
-	}
-#endif
-	arg = 8;
-	if (ioctl(dsp, SOUND_PCM_WRITE_BITS, &arg) < 0) {
-		fprintf(stderr, "ioctl failed with SOUND_PCM_WRITE_BITS = %lu\n", arg);
-		close(dsp);
-		return -errno;
-	}
-	if ((int)arg != 8) {
-		fprintf(stderr, "ioctl cannot set correct sample size\n");
-		close(dsp);
-		return -errno;
+	static const pa_sample_spec ss = {
+		.format = PA_SAMPLE_U8,
+		.rate = SAMPLE_RATE,
+		.channels = 1
+	};
+	pa_simple *s = NULL;
+
+	if (!(s = pa_simple_new(NULL, pname, PA_STREAM_PLAYBACK, NULL, "playback", &ss, NULL, NULL, &error))) {
+		fprintf(stderr, __FILE__": pa_simple_new() failed: %s\n", pa_strerror(error));
+		return NULL;
 	}
 
-        arg = 1;
-        if (ioctl(dsp, SOUND_PCM_WRITE_CHANNELS, &arg) < 0) {
-                fprintf(stderr, "ioctl failed with SOUND_PCM_WRITE_CHANNELS = %lu\n", arg);
-		close(dsp);
-		return -errno;
-        }
-        if ((int)arg != 1) {
-                fprintf(stderr, "ioctl cannot set correct channel number\n");
-		close(dsp);
-		return -errno;
-        }
-
-	arg = rate;
-     	if (ioctl(dsp, SOUND_PCM_WRITE_RATE,&arg) < 0) {
-                fprintf(stderr, "ioctl failed with SOUND_PCM_WRITE_RATE = %lu\n", arg);
-		close(dsp);
-		return -errno;
-        }
-        if ((int)arg != rate) {
-                fprintf(stderr, "ioctl cannot set correct sample rate (got %lu)\n",arg);
-		close(dsp);
-		return -errno;
-        }
-	
-	return dsp;
-}
-
-void close_dsp(int dsp)
-{
-	if (dsp >= 0) {
-#if 0
-		if (ioctl(dsp, SNDCTL_DSP_RESET, NULL) < 0)
-			fprintf(stderr, "ioctl failed with SOUND_DSP_RESET\n");
-#endif
-		close(dsp);
-	}
+	return s;
 }
 
 int main(int argc, char *argv[])
 {
-	int dsp;
+	pa_simple *s;
 	char *dial = "";
 	int ch;
 	char digit[2] = "x";
@@ -179,9 +156,11 @@ int main(int argc, char *argv[])
 	if (argc > 1)
 		dial = argv[1];
 
-	dsp = open_dsp(DSP_DEVICE, SAMPLE_RATE);
-	if (dsp < 0)
-		return dsp;
+	s = open_pa(argv[0]);
+	if (s == NULL) {
+		fprintf(stderr, "cannot open pulse\n");
+		return 1;
+	}
 
 	printf("Welcome to Beep-Beep, your simple bluebox!\n");
 	printf("------------------------------------------\n");
@@ -208,23 +187,23 @@ int main(int argc, char *argv[])
 	while ((ch = getc(stdin)) != 27) {
 		switch(ch) {
 		case 'y': case 'z':
-			dial_dsp(dsp, "C");
+			dial_pa(s, "C");
 			break;
 		case 'x':
-			dial_dsp(dsp, "A");
+			dial_pa(s, "A");
 			break;
 		case 'f':
-			dial_dsp(dsp, "B");
+			dial_pa(s, "B");
 			break;
 		case '1': case '2': case '3': case '4': case '5':
 		case '6': case '7': case '8': case '9': case '0':
 		case 'a': case 'b': case 'c': case 'd': case 'e':
 			digit[0] = ch;
-			dial_dsp(dsp, digit);
+			dial_pa(s, digit);
 			break;
 		case '.':
 			if (dial[0])
-				dial_dsp(dsp, dial);
+				dial_pa(s, dial);
 			break;
 		}
 		if (ch == 3)
@@ -232,7 +211,7 @@ int main(int argc, char *argv[])
 	}
 	tcsetattr(0, TCSANOW, &orig);
 
-	close_dsp(dsp);
+	close_pa(s);
 
 	return 0;
 }

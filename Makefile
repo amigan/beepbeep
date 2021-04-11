@@ -9,7 +9,7 @@ BIN = ./beepbeep
 CC = gcc
 LD = $(CC)
 CFLAGS = -Wall -g
-LIBS = -lm
+LIBS = -lm -lpulse-simple -lpulse
 
 all: $(BIN)
 	@echo "All done"
